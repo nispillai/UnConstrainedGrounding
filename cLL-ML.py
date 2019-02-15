@@ -114,100 +114,9 @@ https://arxiv.org/abs/1312.6114
 #Courtesy: Keras https://github.com/keras-team/keras/
 # & bjlkeng - https://github.com/bjlkeng/sandbox/tree/master/notebooks/vae-semi_supervised_learning
 '''
-#########bjlkeng###########
-def create_dense_layers(stage, width):
-    dense_name = '_'.join(['enc_conv', str(stage)])
-    bn_name = '_'.join(['enc_bn', str(stage)])
-    layers = [
-        Dense(width, name=dense_name),
-        BatchNormalization(name=bn_name),
-        Activation(activation),
-        Dropout(dropout),
-    ]
-    return layers
-
-def inst_layers(layers, in_layer):
-    x = in_layer
-    for layer in layers:
-        if isinstance(layer, list):
-            x = inst_layers(layer, x)
-        else:
-            x = layer(x)
-        
-    return x
-
-def samplingBJ(args, batch_size=batch_size, latent_dim=latent_dim, epsilon_std=epsilon_std):
-    z_mean, z_log_var = args
-    
-    epsilon = K.random_normal(shape=(batch_size, latent_dim),
-                              mean=0., stddev=epsilon_std)
-    
-    return z_mean + K.exp(z_log_var) * epsilon
-
-def kl_loss(x, x_decoded_mean):
-    kl_loss = - 0.5 * K.sum(1. + z_log_var - K.square(z_mean) - K.exp(z_log_var), axis=-1)
-   
-    return K.mean(kl_loss)
-
-def logx_loss(x, x_decoded_mean):
-    x = K.flatten(x)
-    x_decoded_mean = K.flatten(x_decoded_mean)
-    xent_loss = img_rows * img_cols * img_chns * metrics.binary_crossentropy(x, x_decoded_mean)
-    return xent_loss
-
-def vae_loss(x, x_decoded_mean):
-    return logx_loss(x, x_decoded_mean) + kl_loss(x, x_decoded_mean)
-
-def semiVAEM1BJ(x_train,y_train,x_test,y_test):
-   original_img_size = x_train[0].shape[0]
-   batch_size = 100
-   latent_dim = 128
-   intermediate_dim = 512
-   epsilon_std = 1.0
-   epochs = 10
-   activation = 'relu'
-   dropout = 0.5
-   learning_rate = 0.001
-   decay = 0.0
-   
-   x_test = np.array(x_test)
-   print(x_train.shape)
-   print(x_test.shape)
-   x_train = x_train.astype('float32') / 255
-   x_test = x_test.astype('float32') / 255
- 
-   enc_layers = [create_dense_layers(stage=1, width=intermediate_dim),]
-   x = Input(batch_shape=(batch_size,) + original_img_size)
-   _enc_dense = inst_layers(enc_layers, x)
-   _z_mean_1 = Dense(latent_dim)(_enc_dense)
-   _z_log_var_1 = Dense(latent_dim)(_enc_dense)
-   z_mean = _z_mean_1
-   z_log_var = _z_log_var_1
-   
-   z = Lambda(samplingBJ, output_shape=(latent_dim,))([z_mean, z_log_var])
-   decoder_layers = [ create_dense_layers(stage=4, width=original_img_size),]
-   _dec_out = inst_layers(decoder_layers, z)
-   _output = _dec_out
-   vae = Model(inputs=x, outputs=_output)
-   optimizer = Adam(lr=learning_rate, decay=decay)
-   vae.compile(optimizer=optimizer, loss=vae_loss)
-   vae.summary()   
-   
-   history = vae.fit(
-    X_train, X_train,
-    batch_size=batch_size,
-    epochs=epochs,
-    callbacks=[TQDMNotebookCallback()],
-    verbose=0
-   )
-   encoder = Model(x, z_mean)
-   g_z = Input(shape=(latent_dim,))
-   g_output = inst_layers(decoder_layers, g_z)
-   generator = Model(g_z, g_output)
-   
-
 
 ##########################Keras VAE#############
+
 # reparameterization trick
 # instead of sampling from Q(z|X), sample eps = N(0,I)
 # z = z_mean + sqrt(var)*eps
@@ -224,8 +133,9 @@ def sampling(args):
     dim = K.int_shape(z_mean)[1]
     # by default, random_normal has mean=0 and std=1.0
     epsilon = K.random_normal(shape=(batch, dim))
-    return z_mean + K.exp(0.5 * z_log_var) * epsilon
-
+#    return z_mean + K.exp(0.5 * z_log_var) * epsilon
+###MOD 1
+    return z_mean + K.exp(z_log_var) * epsilon
 
 def semiVAEM1(x_train,y_train,x_test,y_test):
    time.sleep(10)
@@ -240,9 +150,12 @@ def semiVAEM1(x_train,y_train,x_test,y_test):
    x_test = x_test.astype('float32') / 255
 # network parameters
    input_shape = (original_dim, )
-   intermediate_dim = 512
+#   intermediate_dim = 512
+
+   intermediate_dim = 300 #MOD 1
+
    batch_size = 32
-   latent_dim = 2
+   latent_dim = 32
    epochs = 50
 
 # VAE model = encoder + decoder
@@ -299,6 +212,16 @@ def semiVAEM1(x_train,y_train,x_test,y_test):
      for dX in enc:
         xt[ind].extend(list(dX))
         ind += 1
+###MOD 1
+   xt = []
+   for i in range(x_test.shape[0]):
+      xt.append([])
+   enc = encoded_test[2]
+   ind = 0
+   for dX in enc:
+       xt[ind].extend(list(dX))
+       ind += 1
+##
    xtest = np.array(xt)
    encoded_train = encoder.predict(x_train)
    xtrain = []
@@ -309,6 +232,16 @@ def semiVAEM1(x_train,y_train,x_test,y_test):
      for dX in enc:
         xtrain[ind].extend(list(dX))
         ind += 1
+###MOD 1
+   xtrain = []
+   for i in range(x_train.shape[0]):
+      xtrain.append([])
+   enc = encoded_train[2]
+   ind = 0
+   for dX in enc:
+       xtrain[ind].extend(list(dX))
+       ind += 1
+##
    xtrain = np.array(xtrain)
 
    polynomial_features = PolynomialFeatures(degree=2,include_bias=False)
@@ -321,6 +254,108 @@ def semiVAEM1(x_train,y_train,x_test,y_test):
    probK = pipeline2_2.predict_proba(xtest)
    tProbs = probK[:,1]
    return tProbs
+
+#########bjlkeng###########
+batch_size = 100
+latent_dim = 128
+intermediate_dim = 512
+epsilon_std = 1.0
+epochs = 10
+activation = 'relu'
+dropout = 0.5
+learning_rate = 0.001
+decay = 0.0
+
+def create_dense_layers(stage, width):
+    dense_name = '_'.join(['enc_conv', str(stage)])
+    bn_name = '_'.join(['enc_bn', str(stage)])
+    layers = [
+        Dense(width, name=dense_name),
+        BatchNormalization(name=bn_name),
+        Activation(activation),
+        Dropout(dropout),
+    ]
+    return layers
+
+def inst_layers(layers, in_layer):
+    x = in_layer
+    for layer in layers:
+        if isinstance(layer, list):
+            x = inst_layers(layer, x)
+        else:
+            x = layer(x)
+
+    return x
+
+def samplingBJ(args, batch_size=batch_size, latent_dim=latent_dim, epsilon_std=epsilon_std):
+    z_mean, z_log_var = args
+
+    epsilon = K.random_normal(shape=(batch_size, latent_dim),
+                              mean=0., stddev=epsilon_std)
+
+    return z_mean + K.exp(z_log_var) * epsilon
+
+def kl_loss(x, x_decoded_mean):
+    kl_loss = - 0.5 * K.sum(1. + z_log_var - K.square(z_mean) - K.exp(z_log_var), axis=-1)
+
+    return K.mean(kl_loss)
+
+def logx_loss(x, x_decoded_mean):
+    x = K.flatten(x)
+    x_decoded_mean = K.flatten(x_decoded_mean)
+    xent_loss = img_rows * img_cols * img_chns * metrics.binary_crossentropy(x, x_decoded_mean)
+    return xent_loss
+
+def vae_loss(x, x_decoded_mean):
+    return logx_loss(x, x_decoded_mean) + kl_loss(x, x_decoded_mean)
+
+def semiVAEM1BJ(x_train,y_train,x_test,y_test):
+   original_img_size = x_train[0].shape[0]
+   batch_size = 100
+   latent_dim = 128
+   intermediate_dim = 512
+   epsilon_std = 1.0
+   epochs = 10
+   activation = 'relu'
+   dropout = 0.5
+   learning_rate = 0.001
+   decay = 0.0
+
+   x_test = np.array(x_test)
+   print(x_train.shape)
+   print(x_test.shape)
+   x_train = x_train.astype('float32') / 255
+   x_test = x_test.astype('float32') / 255
+
+   enc_layers = [create_dense_layers(stage=1, width=intermediate_dim),]
+   x = Input(batch_shape=(batch_size,) + original_img_size)
+   _enc_dense = inst_layers(enc_layers, x)
+   _z_mean_1 = Dense(latent_dim)(_enc_dense)
+   _z_log_var_1 = Dense(latent_dim)(_enc_dense)
+   z_mean = _z_mean_1
+   z_log_var = _z_log_var_1
+
+   z = Lambda(samplingBJ, output_shape=(latent_dim,))([z_mean, z_log_var])
+   decoder_layers = [ create_dense_layers(stage=4, width=original_img_size),]
+   _dec_out = inst_layers(decoder_layers, z)
+   _output = _dec_out
+   vae = Model(inputs=x, outputs=_output)
+   optimizer = Adam(lr=learning_rate, decay=decay)
+   vae.compile(optimizer=optimizer, loss=vae_loss)
+   vae.summary()
+
+   history = vae.fit(
+    X_train, X_train,
+    batch_size=batch_size,
+    epochs=epochs,
+    callbacks=[TQDMNotebookCallback()],
+    verbose=0
+   )
+   encoder = Model(x, z_mean)
+   g_z = Input(shape=(latent_dim,))
+   g_output = inst_layers(decoder_layers, g_z)
+   generator = Model(g_z, g_output)
+
 
 
 
@@ -844,7 +879,6 @@ def findTrainTestFeatures(insts,tkns,tests):
 def callML(resultDir,insts,tkns,tests,algType,resfname):
   """ generate a CSV result file with all probabilities 
 	for the association between tokens (words) and test instances"""	
-  exit(0)
   confFile = open(resultDir + '/groundTruthPrediction.csv','w')
   headFlag = 0
   fldNames = np.array(['Token','Type'])
