@@ -1,4 +1,24 @@
 #!/usr/bin/env python
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
+import h5py
+import keras
+
+from sklearn.decomposition import PCA
+from sklearn.svm import SVC
+from sklearn.metrics import accuracy_score
+from sklearn.model_selection import StratifiedShuffleSplit
+from keras.layers import Input, Dense, Lambda, Flatten, Reshape, BatchNormalization, Activation, Dropout, Conv2D, Conv2DTranspose
+from keras.regularizers import l2
+from keras.initializers import RandomUniform
+from keras.optimizers import RMSprop, Adam, SGD
+from keras.models import Model
+from keras import metrics
+from keras import backend as K
+from keras_tqdm import TQDMNotebookCallback
+
 import numpy as np
 from sklearn import preprocessing
 from scipy.spatial.distance import pdist, squareform
@@ -11,6 +31,7 @@ import json
 import os
 import math
 import sys
+import time
 from datetime import datetime
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import (brier_score_loss, precision_score, recall_score,f1_score)
@@ -25,6 +46,10 @@ import argparse
 from gensim.models.doc2vec import LabeledSentence
 from gensim.models import Doc2Vec
 from scipy import spatial
+
+
+from keras.layers import Lambda, Input, Dense
+from keras.losses import mse, binary_crossentropy
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--resDir',help='path to result directory',required=True)
@@ -58,6 +83,15 @@ generalObjs = ['potatoe','cylinder','square', 'cuboid', 'sphere', 'halfcircle','
 generalShapes = ['spherical', 'cylinder', 'square', 'rounded', 'cylindershaped', 'cuboid', 'rectangleshape','arcshape', 'sphere', 'archshaped', 'cubeshaped', 'curved' ,'rectangular', 'triangleshaped', 'halfcircle', 'globular','halfcylindrical', 'circle', 'rectangle', 'circular', 'cube', 'triangle', 'cubic', 'triangular', 'cylindrical','arch','semicircle', 'squareshape', 'arched','curve', 'halfcylinder', 'wedge', 'cylindershape', 'round', 'block', 'cuboidshaped']
 
 
+rgbWords  = ['yellow','blue','purple', 'orange','red','green']
+shapeWords  = ['cylinder','cube', 'triangle','triangular','rectangular']
+objWords = ['cylinder', 'apple','carrot', 'lime','lemon','orange', 'banana','cube', 'triangle', 'corn','cucumber', 'half', 'cabbage', 'ear', 'tomato', 'potato', 'cob','eggplant']
+
+tobeTestedTokens = rgbWords
+tobeTestedTokens.extend(shapeWords)
+tobeTestedTokens.extend(objWords)
+
+
 def fileAppend(fName, sentence):
   """""""""""""""""""""""""""""""""""""""""
 	Function to write results/outputs to a log file
@@ -78,25 +112,109 @@ def fileAppend(fName, sentence):
 https://arxiv.org/abs/1312.6114
 
 #Courtesy: Keras https://github.com/keras-team/keras/
+# & bjlkeng - https://github.com/bjlkeng/sandbox/tree/master/notebooks/vae-semi_supervised_learning
 '''
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
+#########bjlkeng###########
+def create_dense_layers(stage, width):
+    dense_name = '_'.join(['enc_conv', str(stage)])
+    bn_name = '_'.join(['enc_bn', str(stage)])
+    layers = [
+        Dense(width, name=dense_name),
+        BatchNormalization(name=bn_name),
+        Activation(activation),
+        Dropout(dropout),
+    ]
+    return layers
 
-from keras.layers import Lambda, Input, Dense
-from keras.models import Model
-from keras.losses import mse, binary_crossentropy
-from keras import backend as K
+def inst_layers(layers, in_layer):
+    x = in_layer
+    for layer in layers:
+        if isinstance(layer, list):
+            x = inst_layers(layer, x)
+        else:
+            x = layer(x)
+        
+    return x
 
+def samplingBJ(args, batch_size=batch_size, latent_dim=latent_dim, epsilon_std=epsilon_std):
+    z_mean, z_log_var = args
+    
+    epsilon = K.random_normal(shape=(batch_size, latent_dim),
+                              mean=0., stddev=epsilon_std)
+    
+    return z_mean + K.exp(z_log_var) * epsilon
+
+def kl_loss(x, x_decoded_mean):
+    kl_loss = - 0.5 * K.sum(1. + z_log_var - K.square(z_mean) - K.exp(z_log_var), axis=-1)
+   
+    return K.mean(kl_loss)
+
+def logx_loss(x, x_decoded_mean):
+    x = K.flatten(x)
+    x_decoded_mean = K.flatten(x_decoded_mean)
+    xent_loss = img_rows * img_cols * img_chns * metrics.binary_crossentropy(x, x_decoded_mean)
+    return xent_loss
+
+def vae_loss(x, x_decoded_mean):
+    return logx_loss(x, x_decoded_mean) + kl_loss(x, x_decoded_mean)
+
+def semiVAEM1BJ(x_train,y_train,x_test,y_test):
+   original_img_size = x_train[0].shape[0]
+   batch_size = 100
+   latent_dim = 128
+   intermediate_dim = 512
+   epsilon_std = 1.0
+   epochs = 10
+   activation = 'relu'
+   dropout = 0.5
+   learning_rate = 0.001
+   decay = 0.0
+   
+   x_test = np.array(x_test)
+   print(x_train.shape)
+   print(x_test.shape)
+   x_train = x_train.astype('float32') / 255
+   x_test = x_test.astype('float32') / 255
+ 
+   enc_layers = [create_dense_layers(stage=1, width=intermediate_dim),]
+   x = Input(batch_shape=(batch_size,) + original_img_size)
+   _enc_dense = inst_layers(enc_layers, x)
+   _z_mean_1 = Dense(latent_dim)(_enc_dense)
+   _z_log_var_1 = Dense(latent_dim)(_enc_dense)
+   z_mean = _z_mean_1
+   z_log_var = _z_log_var_1
+   
+   z = Lambda(samplingBJ, output_shape=(latent_dim,))([z_mean, z_log_var])
+   decoder_layers = [ create_dense_layers(stage=4, width=original_img_size),]
+   _dec_out = inst_layers(decoder_layers, z)
+   _output = _dec_out
+   vae = Model(inputs=x, outputs=_output)
+   optimizer = Adam(lr=learning_rate, decay=decay)
+   vae.compile(optimizer=optimizer, loss=vae_loss)
+   vae.summary()   
+   
+   history = vae.fit(
+    X_train, X_train,
+    batch_size=batch_size,
+    epochs=epochs,
+    callbacks=[TQDMNotebookCallback()],
+    verbose=0
+   )
+   encoder = Model(x, z_mean)
+   g_z = Input(shape=(latent_dim,))
+   g_output = inst_layers(decoder_layers, g_z)
+   generator = Model(g_z, g_output)
+   
+
+
+##########################Keras VAE#############
 # reparameterization trick
 # instead of sampling from Q(z|X), sample eps = N(0,I)
 # z = z_mean + sqrt(var)*eps
 def sampling(args):
     """Reparameterization trick by sampling fr an isotropic unit Gaussian.
-
     # Arguments
         args (tensor): mean and log of variance of Q(z|X)
-
     # Returns
         z (tensor): sampled latent vector
     """
@@ -109,17 +227,21 @@ def sampling(args):
     return z_mean + K.exp(0.5 * z_log_var) * epsilon
 
 
-def semiVAE(x_train,y_train,x_test,y_test):
-   acc = 0.0
+def semiVAEM1(x_train,y_train,x_test,y_test):
+   time.sleep(10)
    tProbs = []
-   image_size = x_train.shape[0]
+   x_test = np.array(x_test)
+   image_size = x_train[0].shape[0]
+   print(x_train.shape)
+   print(x_test.shape)
    original_dim = image_size
    x_train = x_train.astype('float32') / 255
+   
    x_test = x_test.astype('float32') / 255
 # network parameters
    input_shape = (original_dim, )
    intermediate_dim = 512
-   batch_size = 128
+   batch_size = 32
    latent_dim = 2
    epochs = 50
 
@@ -168,8 +290,37 @@ def semiVAE(x_train,y_train,x_test,y_test):
                 batch_size=batch_size,
                 validation_data=(x_test, None))
 
+   encoded_test = encoder.predict(x_test)
+   xt = []
+   for i in range(x_test.shape[0]):
+      xt.append([])
+   for enc in encoded_test:
+     ind = 0
+     for dX in enc:
+        xt[ind].extend(list(dX))
+        ind += 1
+   xtest = np.array(xt)
+   encoded_train = encoder.predict(x_train)
+   xtrain = []
+   for i in range(x_train.shape[0]):
+      xtrain.append([])
+   for enc in encoded_train:
+     ind = 0
+     for dX in enc:
+        xtrain[ind].extend(list(dX))
+        ind += 1
+   xtrain = np.array(xtrain)
 
-   return acc,tProbs
+   polynomial_features = PolynomialFeatures(degree=2,include_bias=False)
+   sgdK = linear_model.LogisticRegression(C=10**5,random_state=0)
+#   pipeline2_2 = Pipeline([("polynomial_features", polynomial_features),
+#                         ("logistic", sgdK)])
+   pipeline2_2 = Pipeline([("logistic", sgdK)])
+
+   pipeline2_2.fit(xtrain,y_train)
+   probK = pipeline2_2.predict_proba(xtest)
+   tProbs = probK[:,1]
+   return tProbs
 
 
 
@@ -677,8 +828,9 @@ def findTrainTestFeatures(insts,tkns,tests):
     Returns:  all train test features, values, type of testing
   """""""""""""""""""""""""""""""""""""""""    	
   tokenDict = tkns.to_dict()
-  for token in np.sort(tokenDict.keys()):
+#  for token in np.sort(tokenDict.keys()):
 #  for token in ['arch']:
+  for token in tobeTestedTokens:
      objTkn = tokenDict[token][0]
      for kind in kinds:
 #     for kind in ['rgb']: 
@@ -692,6 +844,7 @@ def findTrainTestFeatures(insts,tkns,tests):
 def callML(resultDir,insts,tkns,tests,algType,resfname):
   """ generate a CSV result file with all probabilities 
 	for the association between tokens (words) and test instances"""	
+  exit(0)
   confFile = open(resultDir + '/groundTruthPrediction.csv','w')
   headFlag = 0
   fldNames = np.array(['Token','Type'])
@@ -708,7 +861,7 @@ def callML(resultDir,insts,tkns,tests,algType,resfname):
   for (token,kind,X,Y,tX,tY) in findTrainTestFeatures(insts,tkns,tests):
    if token not in testTokens:
       testTokens.append(token)
-   print "Token : " + token + ", Kind : " + kind
+   print("Token : " + token + ", Kind : " + kind)
    """ binary classifier Logisitc regression is used here """
    polynomial_features = PolynomialFeatures(degree=2,include_bias=False)
    sgdK = linear_model.LogisticRegression(C=10**5,random_state=0)
@@ -725,6 +878,9 @@ def callML(resultDir,insts,tkns,tests,algType,resfname):
    confDict = {'Token' : token,'Type' : kind}
    """ testing all images category wise and saving the probabilitties in a Map 
    		for ex, for category, tomato, test all images (tomato image 1, tomato image 2...)"""
+   x_test = np.array([])
+   y_test = np.array([])
+   dictNames = []
    for ii in range(len(tX)) :
       testX = tX[ii]
       testY = tY[ii]
@@ -738,15 +894,25 @@ def callML(resultDir,insts,tkns,tests,algType,resfname):
          probK = pipeline2_2.predict_proba(testX)
          tProbs = probK[:,1]
          predY = tProbs 
+         for ik in range(len(tProbs)):
+               confDict[str(ik) + "-" + tt] = str(tProbs[ik])
       elif algType == 1:
-         (acc,tProbs) = semiVAE(X,Y,testX, testY)
-      for ik in range(len(tProbs)):
+         for ik in range(len(testY)):
+           dictNames.append(str(ik) + "-" + tt)
+         if len(x_test) == 0:
+           x_test = np.array(testX)
+         else:
+           x_test = np.concatenate((x_test,np.array(testX)),axis=0)
+         y_test = np.concatenate((y_test,testY),axis=0)
+#         (acc,tProbs) = semiVAE(X,Y,testX, testY)
+      for ik in range(len(testY)):
          fldNames = np.append(fldNames,str(ik) + "-" + tt)
          confD[str(ik) + "-" + tt] = str(fSet[tt])
-	 
-      for ik in range(len(tProbs)):
-           confDict[str(ik) + "-" + tt] = str(tProbs[ik])
 
+   if algType == 1:
+     tProbs = semiVAEM1(X,Y,x_test,y_test)	 
+     for ik in range(len(tProbs)):
+        confDict[dictNames[ik]] = str(tProbs[ik])
    if headFlag == 0:
       headFlag = 1
       """ saving the header of CSV file """
@@ -776,7 +942,7 @@ def execution(resultDir,ds,cDf,nDf,tests):
 
 
 if __name__== "__main__":
-  print "START :: " + datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+  print("START :: " + datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
   anFile =  execPath + "groundtruth_annotation.conf"
 #  anFile =  execPath + preFile
   anFile =  execPath + "6k_lemmatized_72instances_mechanicalturk_description.conf"
@@ -788,6 +954,6 @@ if __name__== "__main__":
   (cDf,nDf) = ds.findCategoryInstances()
   """ find all test instances. We are doing 4- fold cross validation """
   tests = ds.splitTestInstances(cDf)
-  print "ML START :: " + datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+  print("ML START :: " + datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
   execution(resultDir,ds,cDf,nDf,tests)
-  print "ML END :: " + datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+  print("ML END :: " + datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
